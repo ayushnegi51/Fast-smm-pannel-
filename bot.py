@@ -2,11 +2,11 @@ import os
 import sqlite3
 import threading
 import time
+from threading import Thread
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from flask import Flask
-
 # --- CONFIGURATION ---
 BOT_TOKEN = "8972619522:AAHu_I3ccCdsUX-VFGjK8ihMbRAkICdUBN8"
 SMMRAJA_API_URL = "https://smmraja.com/api/v2"
