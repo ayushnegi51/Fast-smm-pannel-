@@ -140,7 +140,7 @@ def background_workers():
 
 threading.Thread(target=background_workers, daemon=True).start()
 
-# --- ADMIN COMMANDS: BALANCE CHECKER & BROADCAST ---
+# --- ADMIN COMMANDS ---
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID:
@@ -213,7 +213,7 @@ def broadcast_message(message):
         parse_mode="HTML"
     )
 
-# --- PAYMENT PROOF HANDLER ---
+# --- PAYMENT & ORDER STEPS ---
 def process_payment_proof(message):
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.first_name
@@ -244,10 +244,35 @@ def process_payment_proof(message):
     else:
         bot.send_message(ADMIN_ID, admin_caption, parse_mode="HTML", reply_markup=markup)
 
-    bot.send_message(message.chat.id, f"✅ <b>Payment proof submitted successfully!</b>\nAdmin will verify your payment (Minimum deposit: ₹{MIN_DEPOSIT_AMOUNT}), and funds will be added to your wallet shortly.", parse_mode="HTML")
+    bot.send_message(message.chat.id, f"✅ <b>Payment proof submitted successfully!</b>\nAdmin will verify your payment, and funds will be added shortly.", parse_mode="HTML")
 
 def process_coupon_redemption(message):
-    pass
+    code = message.text.strip()
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name
+    
+    conn = sqlite3.connect("smm_bot.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT amount, uses_left FROM coupons WHERE code = ?", (code,))
+    coupon = cursor.fetchone()
+    
+    if not coupon:
+        bot.send_message(message.chat.id, "❌ Invalid coupon code!", parse_mode="HTML")
+        conn.close()
+        return
+        
+    amount, uses_left = coupon
+    if uses_left <= 0:
+        bot.send_message(message.chat.id, "❌ This coupon has expired (uses finished).", parse_mode="HTML")
+        conn.close()
+        return
+
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+    cursor.execute("UPDATE coupons SET uses_left = uses_left - 1 WHERE code = ?", (code,))
+    conn.commit()
+    conn.close()
+    
+    bot.send_message(message.chat.id, f"🎉 <b>Coupon Redeemed Successfully!</b>\n₹{amount} added to your wallet.", parse_mode="HTML")
 
 def get_link_dynamic(message):
     user_id = message.from_user.id
@@ -295,7 +320,7 @@ def process_quantity_dynamic(message):
     balance, _ = get_or_create_user(user_id, message.from_user.username or message.from_user.first_name)
 
     if balance < total_price:
-        bot.send_message(message.chat.id, f"❌ <b>Insufficient Balance!</b>\nRequired: ₹{total_price:.2f}\nYour Balance: ₹{balance:.2f}\nPlease add funds to your wallet.", parse_mode="HTML")
+        bot.send_message(message.chat.id, f"❌ <b>Insufficient Balance!</b>\nRequired: ₹{total_price:.2f}\nYour Balance: ₹{balance:.2f}\nPlease add funds.", parse_mode="HTML")
         return
 
     payload = {
@@ -371,65 +396,59 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     username = call.from_user.username or call.from_user.first_name
 
-    if call.data == "account":
+    if call.data == "main_menu":
         bot.answer_callback_query(call.id)
-        balance, spent = get_or_create_user(user_id, username)
-        bot.send_message(call.message.chat.id, f"👤 <b>ACCOUNT INFORMATION</b>\n━━━━━━━━━━━━━━━━━━━\n🆔 <b>User ID:</b> <code>{user_id}</code>\n💰 <b>Current Balance:</b> ₹{balance:.2f}\n💸 <b>Total Spent:</b> ₹{spent:.2f}\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
-
-    elif call.data == "referral":
-        bot.answer_callback_query(call.id)
-        ref_link = f"https://t.me/{bot.get_me().username}?start=ref_{user_id}"
-        bot.send_message(call.message.chat.id, f"🎁 <b>REFER & EARN PROGRAM</b>\n━━━━━━━━━━━━━━━━━━━\nInvite friends and earn <b>₹5.00</b> when they join!\n\n🔗 <b>Your Link:</b>\n<code>{ref_link}</code>\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
-
-    elif call.data == "redeem_menu":
-        bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "🎟️ <b>Send your Promo / Coupon Code:</b>", parse_mode="HTML")
-        bot.register_next_step_handler(msg, process_coupon_redemption)
-
-    elif call.data == "add_funds":
-        bot.answer_callback_query(call.id)
-        markup = InlineKeyboardMarkup(row_width=1)
+        balance, _ = get_or_create_user(user_id, username)
+        markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
-            InlineKeyboardButton("✨ Proceed to QR Payment", callback_data="start_qr_session"),
-            InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")
+            InlineKeyboardButton("🛒 New Order", callback_data="new_order"),
+            InlineKeyboardButton("💳 Add Funds", callback_data="add_funds"),
+            InlineKeyboardButton("👤 My Account", callback_data="account"),
+            InlineKeyboardButton("📦 My Orders", callback_data="my_orders"),
+            InlineKeyboardButton("🎁 Refer & Earn", callback_data="referral"),
+            InlineKeyboardButton("🎟️ Redeem Coupon", callback_data="redeem_menu")
         )
-        bot.send_message(call.message.chat.id, f"💳 <b>ADD FUNDS TO WALLET</b>\n━━━━━━━━━━━━━━━━━━━\nClick below to generate your secure payment QR session.\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML", reply_markup=markup)
-
-    elif call.data == "start_qr_session":
-        bot.answer_callback_query(call.id)
-        markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(InlineKeyboardButton("✅ I Have Paid (Send UTR / Proof)", callback_data="submit_proof"))
-        payment_text = (
-            f"💳 <b>SECURE PAYMENT GATEWAY</b>\n"
+        welcome_text = (
+            f"🌟 <b>MAIN MENU</b> 🌟\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"👉 <b>UPI ID:</b> <code>{UPI_ID}</code>\n"
-            f"⏳ <b>Status:</b> Active\n\n"
-            f"1️⃣ Scan QR & pay exact amount (Min ₹30).\n"
-            f"2️⃣ Click below to submit proof.\n"
+            f"💰 <b>Wallet Balance:</b> ₹{balance:.2f}\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👤 <b>Owner:</b> {OWNER_HANDLE}"
         )
-        bot.send_photo(call.message.chat.id, QR_CODE_IMAGE_URL, caption=payment_text, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=welcome_text, parse_mode="HTML", reply_markup=markup)
 
-    elif call.data == "submit_proof":
+    elif call.data == "new_order":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(call.message.chat.id, "📤 <b>Send your UTR / Transaction ID or screenshot:</b>", parse_mode="HTML")
-        bot.register_next_step_handler(msg, process_payment_proof)
+        services = get_cached_services()
+        if not services:
+            bot.send_message(call.message.chat.id, "❌ Unable to fetch services right now. Try again later.", parse_mode="HTML")
+            return
+        
+        categories = sorted(list(set(s.get("category", "General") for s in services)))
+        markup = InlineKeyboardMarkup(row_width=1)
+        for cat in categories[:15]: # Top categories limit
+            markup.add(InlineKeyboardButton(cat, callback_data=f"cat_{cat[:30]}"))
+        markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
+        
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="📂 <b>Select Category:</b>", parse_mode="HTML", reply_markup=markup)
 
-    elif call.data == "my_orders":
+    elif call.data.startswith("cat_"):
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect("smm_bot.db", check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT order_id, smm_order_id, service_name, quantity, status FROM orders WHERE user_id = ? ORDER BY order_id DESC LIMIT 5", (user_id,))
-        orders = cursor.fetchall()
-        conn.close()
-        if not orders:
-            bot.send_message(call.message.chat.id, f"📦 <b>No orders placed yet!</b>\n\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
-        else:
-            orders_text = "📦 <b>YOUR RECENT ORDERS</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
-            markup = InlineKeyboardMarkup(row_width=1)
-            for ord in orders:
-                orders_text += f"🔹 <b>DB ID:</b> {ord[0]} | 📌 <b>Service:</b> {ord[2]}\n🔢 <b>Qty:</b> {ord[3]} | 📊 <b>Status:</b> <b>{ord[4]}</b>\n━━━━━━━━━━━━━━━━━━━\n"
-                markup.add(InlineKeyboardButton(f"🔄 Check Status (ID: {ord[0]})", callback_data=f"chk_{ord[1]}"))
-            orders_text += f"\n👤 <b>Owner:</b> {OWNER_HANDLE}"
-            bot.send_message(call.message.ch
+        selected_cat = call.data.replace("cat_", "")
+        services = get_cached_services()
+        
+        markup = InlineKeyboardMarkup(row_width=1)
+        count = 0
+        for s in services:
+            if s.get("category", "").startswith(selected_cat):
+                s_id = s.get("service")
+                s_name = s.get("name")
+                rate_inr = calculate_selling_rate(s.get("rate"))
+                markup.add(InlineKeyboardButton(f"{s_name[:40]} - ₹{rate_inr}/1k", callback_data=f"srv_{s_id}"))
+                count += 1
+                if count >= 20: # Limit per view
+                    break
+        markup.add(InlineKeyboardButton("🔙 Back to Categories", callback_data="new_order"))
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"📌 <b>Select Service in {selected_cat}:</b>", parse_mode="HTML", reply_markup=markup)
+
+    elif call.data.startswith("srv_"):
