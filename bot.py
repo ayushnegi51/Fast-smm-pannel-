@@ -7,6 +7,7 @@ import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from flask import Flask
+
 # --- CONFIGURATION ---
 BOT_TOKEN = "8972619522:AAHu_I3ccCdsUX-VFGjK8ihMbRAkICdUBN8"
 SMMRAJA_API_URL = "https://smmraja.com/api/v2"
@@ -35,7 +36,7 @@ def run_web():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Background mein Flask server start karna taaki Render crash na kare
+# Background mein Flask server start karna taaki port open rahe
 web_thread = Thread(target=run_web, daemon=True)
 web_thread.start()
 
@@ -431,19 +432,4 @@ def handle_callbacks(call):
                 orders_text += f"🔹 <b>DB ID:</b> {ord[0]} | 📌 <b>Service:</b> {ord[2]}\n🔢 <b>Qty:</b> {ord[3]} | 📊 <b>Status:</b> <b>{ord[4]}</b>\n━━━━━━━━━━━━━━━━━━━\n"
                 markup.add(InlineKeyboardButton(f"🔄 Check Status (ID: {ord[0]})", callback_data=f"chk_{ord[1]}"))
             orders_text += f"\n👤 <b>Owner:</b> {OWNER_HANDLE}"
-            bot.send_message(call.message.chat.id, orders_text, parse_mode="HTML", reply_markup=markup)
-
-    elif call.data.startswith("chk_"):
-        bot.answer_callback_query(call.id)
-        smm_id = call.data.split("_")[1]
-        try:
-            res = requests.post(SMMRAJA_API_URL, data={"key": SMMRAJA_API_KEY, "action": "status", "order": smm_id}, timeout=10).json()
-            if "status" in res:
-                bot.send_message(call.message.chat.id, f"📊 <b>Order Status:</b> {res['status']}", parse_mode="HTML")
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Error: {str(e)}", parse_mode="HTML")
-
-# Bot polling loop
-if __name__ == '__main__':
-    print("Bot is starting...")
-    bot.infinity_polling(skip_pending=True)
+            bot.send_message(call.message.ch
