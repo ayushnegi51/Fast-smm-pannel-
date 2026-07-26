@@ -249,7 +249,6 @@ def process_payment_proof(message):
 def process_coupon_redemption(message):
     code = message.text.strip()
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name
     
     conn = sqlite3.connect("smm_bot.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -426,7 +425,7 @@ def handle_callbacks(call):
         
         categories = sorted(list(set(s.get("category", "General") for s in services)))
         markup = InlineKeyboardMarkup(row_width=1)
-        for cat in categories[:15]: # Top categories limit
+        for cat in categories[:15]:
             markup.add(InlineKeyboardButton(cat, callback_data=f"cat_{cat[:30]}"))
         markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu"))
         
@@ -446,9 +445,12 @@ def handle_callbacks(call):
                 rate_inr = calculate_selling_rate(s.get("rate"))
                 markup.add(InlineKeyboardButton(f"{s_name[:40]} - ₹{rate_inr}/1k", callback_data=f"srv_{s_id}"))
                 count += 1
-                if count >= 20: # Limit per view
+                if count >= 20:
                     break
         markup.add(InlineKeyboardButton("🔙 Back to Categories", callback_data="new_order"))
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"📌 <b>Select Service in {selected_cat}:</b>", parse_mode="HTML", reply_markup=markup)
 
     elif call.data.startswith("srv_"):
+        bot.answer_callback_query(call.id)
+        s_id = call.data.replace("srv_", "")
+        services = get_ca
