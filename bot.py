@@ -1,9 +1,11 @@
+import os
 import sqlite3
 import threading
 import time
 import requests
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+from flask import Flask
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "8972619522:AAHu_I3ccCdsUX-VFGjK8ihMbRAkICdUBN8"
@@ -21,6 +23,21 @@ LOW_BALANCE_THRESHOLD = 2.0
 
 bot = telebot.TeleBot(BOT_TOKEN)
 user_data = {}
+
+# --- RENDER WEB SERVER (PORT BINDING FIX) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive and running!"
+
+def run_web():
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
+
+# Background mein Flask server start karna taaki Render crash na kare
+web_thread = Thread(target=run_web, daemon=True)
+web_thread.start()
 
 # --- CACHE FOR FAST PERFORMANCE ---
 SERVICES_CACHE = []
@@ -422,118 +439,11 @@ def handle_callbacks(call):
         try:
             res = requests.post(SMMRAJA_API_URL, data={"key": SMMRAJA_API_KEY, "action": "status", "order": smm_id}, timeout=10).json()
             if "status" in res:
-                bot.send_message(call.message.chat.id, f"📊 <b>STATUS REPORT</b>\n━━━━━━━━━━━━━━━━━━━\n🆔 <b>ID:</b> {smm_id}\n📌 <b>Status:</b> <b>{res['status']}</b>\n💰 <b>Charge:</b> ${res.get('charge', '0')}\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
-            else:
-                bot.send_message(call.message.chat.id, "❌ Could not fetch status.", parse_mode="HTML")
-        except:
-            bot.send_message(call.message.chat.id, "❌ API error.", parse_mode="HTML")
-
-    elif call.data == "new_order":
-        bot.answer_callback_query(call.id)
-        services = get_cached_services()
-        if services:
-            user_data[user_id] = {"all_services": services}
-            markup = InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                InlineKeyboardButton("📸 Instagram", callback_data="plat_instagram"),
-                InlineKeyboardButton("📘 Facebook", callback_data="plat_facebook"),
-                InlineKeyboardButton("▶️ YouTube", callback_data="plat_youtube"),
-                InlineKeyboardButton("📢 Telegram", callback_data="plat_telegram"),
-                InlineKeyboardButton("👻 Snapchat", callback_data="plat_snapchat")
-            )
-            markup.add(InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu"))
-            bot.send_message(call.message.chat.id, f"🌐 <b>CHOOSE A PLATFORM:</b>\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML", reply_markup=markup)
-        else:
-            bot.send_message(call.message.chat.id, "❌ Failed to fetch services from SMM API. Try again later.", parse_mode="HTML")
-
-    elif call.data.startswith("plat_"):
-        bot.answer_callback_query(call.id)
-        platform = call.data.replace("plat_", "")
-        all_services = user_data.get(user_id, {}).get("all_services", get_cached_services())
-        markup = InlineKeyboardMarkup(row_width=1)
-        count = 0
-        for s in all_services:
-            cat_lower = s.get("category", "").lower()
-            name_lower = s.get("name", "").lower()
-            matched = False
-            if platform == "instagram":
-                if any(kw in cat_lower or kw in name_lower for kw in ["instagram", "ig", "insta"]):
-                    matched = True
-            else:
-                if platform in cat_lower or platform in name_lower:
-                    matched = True
-            if matched:
-                s_id = s.get("service")
-                s_name = s.get("name")
-                rate_usd = s.get("rate")
-                selling_rate_inr = calculate_selling_rate(rate_usd)
-                markup.add(InlineKeyboardButton(f"🔹 {s_name[:40]} (₹{selling_rate_inr}/K)", callback_data=f"srvsel_{s_id}"))
-                count += 1
-                if count >= 45:
-                    break
-        if count == 0:
-            bot.send_message(call.message.chat.id, f"❌ No services found for {platform}.", parse_mode="HTML")
-            return
-        markup.add(InlineKeyboardButton("🔙 Back to Platforms", callback_data="new_order"))
-        bot.send_message(call.message.chat.id, f"📌 <b>{platform.upper()} SERVICES:</b>\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML", reply_markup=markup)
-
-    elif call.data.startswith("srvsel_"):
-        bot.answer_callback_query(call.id)
-        service_id = call.data.replace("srvsel_", "")
-        all_services = user_data.get(user_id, {}).get("all_services", get_cached_services())
-        selected_service = next((s for s in all_services if str(s.get("service")) == str(service_id)), None)
-        if selected_service:
-            selected_service["selling_rate"] = calculate_selling_rate(selected_service["rate"])
-            if user_id not in user_data:
-                user_data[user_id] = {}
-            user_data[user_id]["selected_service"] = selected_service
-            msg = bot.send_message(call.message.chat.id, f"🔗 <b>Send your target link for:</b>\n<i>{selected_service['name']}</i>\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
-            bot.register_next_step_handler(msg, get_link_dynamic)
-        else:
-            bot.send_message(call.message.chat.id, "❌ Session expired. Type /start", parse_mode="HTML")
-
-    elif call.data.startswith("approve_"):
-        try:
-            parts = call.data.split("_")
-            target_user_id, amount = int(parts[1]), float(parts[2])
-            conn = sqlite3.connect("smm_bot.db", check_same_thread=False)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, target_user_id))
-            conn.commit()
-            conn.close()
-            bot.answer_callback_query(call.id, f"✅ Approved! ₹{amount} added.")
-            if call.message.caption:
-                bot.edit_message_caption(chat_id=call.message.chat.id, message_id=call.message.message_id, caption=f"{call.message.caption}\n\n<b>STATUS: APPROVED ✅ (Added ₹{amount})</b>", parse_mode="HTML", reply_markup=None)
-            else:
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n<b>STATUS: APPROVED ✅ (Added ₹{amount})</b>", parse_mode="HTML", reply_markup=None)
-            bot.send_message(target_user_id, f"🎉 <b>Your payment of ₹{amount} has been added to your wallet!</b>\n\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
+                bot.send_message(call.message.chat.id, f"📊 <b>Order Status:</b> {res['status']}", parse_mode="HTML")
         except Exception as e:
-            bot.answer_callback_query(call.id, f"❌ Error: {str(e)}", show_alert=True)
+            bot.send_message(call.message.chat.id, f"❌ Error: {str(e)}", parse_mode="HTML")
 
-    elif call.data.startswith("reject_"):
-        try:
-            target_user_id = int(call.data.split("_")[1])
-            bot.answer_callback_query(call.id, "❌ Rejected.")
-            if call.message.caption:
-                bot.edit_message_caption(chat_id=call.message.chat.id, message_id=call.message.message_id, caption=f"{call.message.caption}\n\n<b>STATUS: REJECTED ❌</b>", parse_mode="HTML", reply_markup=None)
-            else:
-                bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"{call.message.text}\n\n<b>STATUS: REJECTED ❌</b>", parse_mode="HTML", reply_markup=None)
-            bot.send_message(target_user_id, f"❌ <b>Your payment submission was rejected by Admin.</b>\n\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML")
-        except Exception as e:
-            bot.answer_callback_query(call.id, f"❌ Error: {str(e)}", show_alert=True)
-
-    elif call.data == "main_menu":
-        bot.answer_callback_query(call.id)
-        balance, _ = get_or_create_user(user_id, username)
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton("🛒 New Order", callback_data="new_order"),
-            InlineKeyboardButton("💳 Add Funds", callback_data="add_funds"),
-            InlineKeyboardButton("👤 My Account", callback_data="account"),
-            InlineKeyboardButton("📦 My Orders", callback_data="my_orders"),
-            InlineKeyboardButton("🎁 Refer & Earn", callback_data="referral"),
-            InlineKeyboardButton("🎟️ Redeem Coupon", callback_data="redeem_menu")
-        )
-        bot.send_message(call.message.chat.id, f"🌟 <b>WELCOME TO FAST SMM PANEL</b> 🌟\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Name:</b> {call.from_user.first_name}\n🆔 <b>ID:</b> <code>{user_id}</code>\n💰 <b>Balance:</b> ₹{balance:.2f}\n━━━━━━━━━━━━━━━━━━━\n👤 <b>Owner:</b> {OWNER_HANDLE}", parse_mode="HTML", reply_markup=markup)
-
-bot.infinity_polling()
+# Bot polling loop
+if __name__ == '__main__':
+    print("Bot is starting...")
+    bot.infinity_polling(skip_pending=True)
